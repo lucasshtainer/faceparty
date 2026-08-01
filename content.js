@@ -70,13 +70,12 @@
     frame.id = "fp-frame";
     frame.className = "fp-frame";
     frame.src = PANEL_URL;
-    frame.allow = "camera; microphone; autoplay; display-capture";
-    frame.setAttribute("allow", "camera; microphone; autoplay");
-    // Some Chromium builds also honor this Permissions-Policy attribute:
+    // Required so getUserMedia works inside the extension iframe on Netflix.
     frame.setAttribute(
       "allow",
-      "camera *; microphone *; autoplay *; clipboard-write *"
+      "camera; microphone; autoplay; clipboard-write; display-capture"
     );
+    frame.allow = "camera; microphone; autoplay; clipboard-write; display-capture";
 
     resizeHandle = document.createElement("div");
     resizeHandle.id = "fp-resize";

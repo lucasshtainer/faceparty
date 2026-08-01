@@ -16,8 +16,10 @@
   const INVITE_ORIGIN = "https://faceparty.link";
   const ROOM_CODE_RE = /^[a-z0-9]{6}$/;
   const MAX_PEERS = 6;
-  const HUB_CONNECT_TIMEOUT_MS = 2500;
+  const HUB_CONNECT_TIMEOUT_MS = 3500;
   const HUB_REELECT_JITTER_MS = 900;
+  const MESH_RETRY_MS = 1200;
+  const MESH_RETRY_MAX = 12;
 
   const ICONS = {
     camOn: `<svg viewBox="0 0 24 24"><path d="M17 10.5V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3.5l4 3.5V7l-4 3.5z"/></svg>`,
@@ -45,7 +47,11 @@
     hubPeer: null,
     peers: new Map(),
     joining: false,
+    joinEpoch: 0,
+    hubConn: null, // live data connection to the room hub (not the hub peer itself)
     hubReelectTimer: null,
+    rosterTimer: null,
+    mediaPlaceholder: false, // true when using a black dummy stream (camera blocked)
     audioCtx: null,
     rafSpeaking: null,
     _localAnalyser: null,
@@ -71,6 +77,10 @@
     if (DEBUG) console.log("[FaceParty:panel]", ...args);
   }
   function warn(...args) {
+    // peer-unavailable is normal while discovering a hub that doesn't exist yet.
+    const first = args[0];
+    if (first === "peer-unavailable" || first === "peer error peer-unavailable") return;
+    if (typeof first === "string" && first.includes("peer-unavailable")) return;
     console.warn("[FaceParty:panel]", ...args);
   }
 
@@ -243,38 +253,104 @@
     state.rafSpeaking = requestAnimationFrame(tick);
   }
 
-  async function ensureLocalMedia() {
-    if (state.localStream) return state.localStream;
+  /** Black video + silent audio so WebRTC calls still work if the cam is blocked. */
+  function createPlaceholderStream() {
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#151b24";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    ctx.font = "600 28px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Camera off", canvas.width / 2, canvas.height / 2);
+    const stream = canvas.captureStream(8);
+    // Silent audio track (some peers expect audio m-line).
+    try {
+      const audioCtx = ensureAudioCtx();
+      if (audioCtx) {
+        const dest = audioCtx.createMediaStreamDestination();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        gain.gain.value = 0;
+        osc.connect(gain);
+        gain.connect(dest);
+        osc.start();
+        dest.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
+        stream._fpOsc = osc;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    return stream;
+  }
+
+  async function ensureLocalMedia({ requireReal = false } = {}) {
+    if (state.localStream && !state.mediaPlaceholder) return state.localStream;
+    if (state.localStream && state.mediaPlaceholder && !requireReal) {
+      return state.localStream;
+    }
+
     try {
       ensureAudioCtx()?.resume?.();
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 360 }, facingMode: "user" },
         audio: { echoCancellation: true, noiseSuppression: true },
       });
+
+      // Swap out placeholder if we had one.
+      if (state.localStream && state.mediaPlaceholder) {
+        state.localStream.getTracks().forEach((t) => t.stop());
+      }
+
       state.localStream = stream;
+      state.mediaPlaceholder = false;
       state.camOn = state.camOnByDefault;
       state.micOn = state.micOnByDefault;
       stream.getVideoTracks().forEach((t) => (t.enabled = state.camOn));
       stream.getAudioTracks().forEach((t) => (t.enabled = state.micOn));
       state._localAnalyser = attachAnalyser(stream);
       startSpeakingLoop();
+      // Re-call everyone so they receive the real camera track.
+      recallAllPeers();
+      renderGrid();
       return stream;
     } catch (err) {
-      warn("getUserMedia failed", err);
-      throw new Error(
-        "Camera/mic blocked. Click Allow when prompted (FaceParty needs access). Check the lock icon if you previously denied."
-      );
+      warn("getUserMedia failed", err?.name || err);
+      if (requireReal) {
+        throw new Error(
+          "Camera/mic blocked. Click Allow on the FaceParty prompt, or site settings → Camera."
+        );
+      }
+      if (!state.localStream) {
+        state.localStream = createPlaceholderStream();
+        state.mediaPlaceholder = true;
+        state.camOn = false;
+        state.micOn = false;
+        toast("Camera blocked — click Enable camera in the panel");
+      }
+      return state.localStream;
     }
   }
 
   function stopLocalMedia() {
+    try {
+      state.localStream?._fpOsc?.stop?.();
+    } catch (_) {
+      /* ignore */
+    }
     state.localStream?.getTracks().forEach((t) => t.stop());
     state.localStream = null;
+    state.mediaPlaceholder = false;
     state._localAnalyser = null;
   }
 
   function toggleCam(force) {
-    if (!state.localStream) return;
+    if (!state.localStream || state.mediaPlaceholder) {
+      ensureLocalMedia({ requireReal: true }).catch((e) => toast(e.message));
+      return;
+    }
     state.camOn = typeof force === "boolean" ? force : !state.camOn;
     state.localStream.getVideoTracks().forEach((t) => (t.enabled = state.camOn));
     broadcastData({ type: "MEDIA_STATE", camOn: state.camOn, micOn: state.micOn });
@@ -282,7 +358,10 @@
   }
 
   function toggleMic(force) {
-    if (!state.localStream) return;
+    if (!state.localStream || state.mediaPlaceholder) {
+      ensureLocalMedia({ requireReal: true }).catch((e) => toast(e.message));
+      return;
+    }
     state.micOn = typeof force === "boolean" ? force : !state.micOn;
     state.localStream.getAudioTracks().forEach((t) => (t.enabled = state.micOn));
     broadcastData({ type: "MEDIA_STATE", camOn: state.camOn, micOn: state.micOn });
@@ -341,15 +420,30 @@
     video.autoplay = true;
     video.playsInline = true;
     video.muted = isLocal;
-    if (stream && camOn) {
+    // Always attach stream when we have one (even if "cam off" — track may be disabled).
+    if (stream) {
       video.srcObject = stream;
       video.play().catch(() => {});
     }
 
     const placeholder = document.createElement("div");
     placeholder.className = "fp-tile__placeholder";
-    placeholder.textContent = (name || "?").trim().charAt(0).toUpperCase() || "?";
-    placeholder.hidden = Boolean(stream && camOn);
+
+    if (isLocal && state.mediaPlaceholder) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "fp-btn fp-btn--accent";
+      btn.textContent = "Enable camera";
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        ensureLocalMedia({ requireReal: true }).catch((err) => toast(err.message));
+      });
+      placeholder.appendChild(btn);
+    } else {
+      placeholder.textContent = (name || "?").trim().charAt(0).toUpperCase() || "?";
+      // Hide placeholder when we have a live-looking video track enabled.
+      placeholder.hidden = Boolean(stream && camOn);
+    }
 
     const label = document.createElement("div");
     label.className = "fp-tile__name";
@@ -383,7 +477,6 @@
         resolve(id);
       };
       const onError = (err) => {
-        // unavailable-id is expected when racing for hub — bubble it up.
         cleanup();
         reject(err);
       };
@@ -401,7 +494,6 @@
     if (typeof Peer === "undefined") {
       throw new Error("PeerJS failed to load.");
     }
-    // PeerJS rejects IDs with characters outside [A-Za-z0-9 _-].
     return new Peer(id, { debug: DEBUG ? 2 : 0 });
   }
 
@@ -413,13 +505,17 @@
     }
   }
 
+  function isHubPeerId(id) {
+    return typeof id === "string" && id.endsWith("-hub");
+  }
+
   function getKnownPeerList() {
     return [
       {
         id: state.localPeerId,
         name: state.displayName,
-        camOn: state.camOn,
-        micOn: state.micOn,
+        camOn: state.camOn && !state.mediaPlaceholder,
+        micOn: state.micOn && !state.mediaPlaceholder,
       },
       ...[...state.peers.entries()].map(([id, p]) => ({
         id,
@@ -430,41 +526,68 @@
     ];
   }
 
+  function startRosterBroadcast() {
+    clearInterval(state.rosterTimer);
+    if (!state.isHub) return;
+    state.rosterTimer = setInterval(() => {
+      if (!state.isHub) return;
+      // Keep everyone's mesh in sync if a dial was missed.
+      broadcastData({ type: "PEER_LIST", peers: getKnownPeerList() });
+      if (state.hubPeer) {
+        // Also push to anyone currently connected only via hub signaling.
+      }
+    }, 4000);
+  }
+
   function wireHubPeer(hubPeer) {
     state.hubPeer = hubPeer;
     state.isHub = true;
     log("I am the hub");
+    startRosterBroadcast();
 
     hubPeer.on("connection", (conn) => {
       conn.on("open", () => {
-        conn.on("data", (msg) => {
-          if (!msg || typeof msg !== "object" || msg.type !== "HELLO" || !msg.peerId) return;
+        // Send roster immediately; newcomers also send HELLO.
+        try {
           conn.send({ type: "PEER_LIST", peers: getKnownPeerList() });
-          ensureMeshPeer(msg.peerId, {
-            name: msg.name || "Friend",
-            camOn: msg.camOn !== false,
-            micOn: msg.micOn !== false,
-          });
-          broadcastData({
-            type: "PEER_JOINED",
-            peer: {
-              id: msg.peerId,
+        } catch (_) {
+          /* ignore */
+        }
+
+        conn.on("data", (msg) => {
+          if (!msg || typeof msg !== "object") return;
+          if (msg.type === "HELLO" && msg.peerId) {
+            conn.send({ type: "PEER_LIST", peers: getKnownPeerList() });
+            ensureMeshPeer(msg.peerId, {
               name: msg.name || "Friend",
               camOn: msg.camOn !== false,
               micOn: msg.micOn !== false,
-            },
-          });
+            });
+            broadcastData({
+              type: "PEER_JOINED",
+              peer: {
+                id: msg.peerId,
+                name: msg.name || "Friend",
+                camOn: msg.camOn !== false,
+                micOn: msg.micOn !== false,
+              },
+            });
+          } else if (msg.type === "REQUEST_LIST") {
+            conn.send({ type: "PEER_LIST", peers: getKnownPeerList() });
+          }
         });
       });
     });
 
     hubPeer.on("error", (err) => {
-      warn("hub error", err?.type || err);
-      if (err?.type === "unavailable-id" || err?.type === "network") {
+      if (err?.type === "unavailable-id") {
         state.isHub = false;
         destroyPeer(state.hubPeer);
         state.hubPeer = null;
+        clearInterval(state.rosterTimer);
+        return;
       }
+      warn("hub error", err?.type || err);
     });
 
     hubPeer.on("disconnected", () => {
@@ -491,10 +614,17 @@
     }
   }
 
-  function connectToHub(roomCode) {
+  /**
+   * Connect to the room hub for discovery only.
+   * @param {string} roomCode
+   * @param {{discoverOnly?: boolean}} opts discoverOnly=true means a failed
+   *   attempt must NOT schedule hub re-election (used during initial join).
+   */
+  function connectToHub(roomCode, { discoverOnly = false } = {}) {
     return new Promise((resolve) => {
       if (!state.myPeer) return resolve(false);
       let settled = false;
+      let opened = false;
       const conn = state.myPeer.connect(hubIdFor(roomCode), { reliable: true });
 
       const done = (ok) => {
@@ -505,37 +635,50 @@
       };
 
       const timer = setTimeout(() => {
-        try {
-          conn.close();
-        } catch (_) {
-          /* ignore */
+        if (!opened) {
+          try {
+            conn.close();
+          } catch (_) {
+            /* ignore */
+          }
         }
         done(false);
       }, HUB_CONNECT_TIMEOUT_MS);
 
       conn.on("open", () => {
+        opened = true;
+        state.hubConn = conn;
         conn.send({
           type: "HELLO",
           peerId: state.localPeerId,
           name: state.displayName,
-          camOn: state.camOn,
-          micOn: state.micOn,
+          camOn: state.camOn && !state.mediaPlaceholder,
+          micOn: state.micOn && !state.mediaPlaceholder,
         });
       });
 
-      conn.on("data", async (msg) => {
-        if (msg?.type === "PEER_LIST") {
-          for (const p of msg.peers || []) {
-            if (!p?.id || p.id === state.localPeerId) continue;
-            await ensureMeshPeer(p.id, p);
-          }
+      conn.on("data", (msg) => {
+        if (!msg || typeof msg !== "object") return;
+        if (msg.type === "PEER_LIST") {
+          applyPeerList(msg.peers);
           done(true);
         }
       });
 
-      conn.on("error", () => done(false));
+      conn.on("error", () => {
+        if (!opened) done(false);
+      });
+
       conn.on("close", () => {
-        if (state.roomCode) scheduleHubReelection();
+        if (state.hubConn === conn) state.hubConn = null;
+        if (!settled) {
+          done(false);
+          return;
+        }
+        // Only re-elect after we had a real live hub connection.
+        if (!discoverOnly && opened && state.roomCode && !state.isHub) {
+          scheduleHubReelection();
+        }
       });
     });
   }
@@ -543,16 +686,23 @@
   function scheduleHubReelection() {
     if (!state.roomCode || state.isHub) return;
     clearTimeout(state.hubReelectTimer);
-    const delay = 200 + Math.floor(Math.random() * HUB_REELECT_JITTER_MS);
+    const delay = 250 + Math.floor(Math.random() * HUB_REELECT_JITTER_MS);
     state.hubReelectTimer = setTimeout(async () => {
       if (!state.roomCode || state.isHub) return;
-      const connected = await connectToHub(state.roomCode);
+      const connected = await connectToHub(state.roomCode, { discoverOnly: false });
       if (!connected) await tryBecomeHub(state.roomCode);
     }, delay);
   }
 
+  function applyPeerList(peers) {
+    for (const p of peers || []) {
+      if (!p?.id || p.id === state.localPeerId || isHubPeerId(p.id)) continue;
+      ensureMeshPeer(p.id, p);
+    }
+  }
+
   function ensurePeerRecord(peerId, meta = {}) {
-    if (peerId === state.localPeerId) return null;
+    if (!peerId || peerId === state.localPeerId || isHubPeerId(peerId)) return null;
     if (state.peers.size >= MAX_PEERS - 1 && !state.peers.has(peerId)) return null;
     let peer = state.peers.get(peerId);
     if (!peer) {
@@ -564,9 +714,14 @@
         camOn: meta.camOn !== false,
         micOn: meta.micOn !== false,
         analyser: null,
+        retryTimer: null,
+        retries: 0,
+        dead: false,
       };
       state.peers.set(peerId, peer);
+      renderGrid();
     } else {
+      peer.dead = false;
       if (meta.name) peer.name = meta.name;
       if (meta.camOn != null) peer.camOn = meta.camOn;
       if (meta.micOn != null) peer.micOn = meta.micOn;
@@ -574,69 +729,176 @@
     return peer;
   }
 
-  async function ensureMeshPeer(peerId, meta = {}) {
-    const peer = ensurePeerRecord(peerId, meta);
-    if (!peer || !state.myPeer) return;
+  function shouldInitiateMedia(remoteId) {
+    return state.localPeerId && remoteId && state.localPeerId < remoteId;
+  }
 
-    if (!peer.dataConn || peer.dataConn.open === false) {
-      if (state.localPeerId < peerId) {
-        attachDataConn(peerId, state.myPeer.connect(peerId, { reliable: true }));
+  function ensureMeshPeer(peerId, meta = {}) {
+    const peer = ensurePeerRecord(peerId, meta);
+    if (!peer || !state.myPeer || state.myPeer.destroyed) return;
+
+    // Data: both sides may dial; first open wins. Retries cover peer-unavailable races.
+    dialData(peerId);
+    // Media: only the lexicographically smaller id dials (avoids call glare).
+    if (shouldInitiateMedia(peerId)) dialMedia(peerId);
+    scheduleMeshRetry(peerId);
+  }
+
+  function scheduleMeshRetry(peerId) {
+    const peer = state.peers.get(peerId);
+    if (!peer || peer.dead) return;
+    clearTimeout(peer.retryTimer);
+    if (peer.retries >= MESH_RETRY_MAX) return;
+
+    const dataOk = peer.dataConn?.open;
+    const mediaOk = Boolean(peer.stream) || (!shouldInitiateMedia(peerId) && peer.mediaConn);
+    if (dataOk && (mediaOk || !state.localStream)) return;
+
+    peer.retryTimer = setTimeout(() => {
+      const p = state.peers.get(peerId);
+      if (!p || p.dead || !state.roomCode) return;
+      p.retries += 1;
+      log("retry mesh", peerId, p.retries);
+      if (!p.dataConn?.open) dialData(peerId);
+      if (shouldInitiateMedia(peerId) && !p.stream) dialMedia(peerId);
+      scheduleMeshRetry(peerId);
+    }, MESH_RETRY_MS);
+  }
+
+  function dialData(peerId) {
+    const peer = state.peers.get(peerId);
+    if (!peer || !state.myPeer || state.myPeer.destroyed) return;
+    if (peer.dataConn?.open) return;
+    // Drop a dead half-open connection before redialing.
+    if (peer.dataConn && !peer.dataConn.open) {
+      try {
+        peer.dataConn.close();
+      } catch (_) {
+        /* ignore */
+      }
+      peer.dataConn = null;
+    }
+    try {
+      const conn = state.myPeer.connect(peerId, { reliable: true });
+      attachDataConn(peerId, conn);
+    } catch (err) {
+      log("dialData failed", peerId, err?.message || err);
+    }
+  }
+
+  function dialMedia(peerId) {
+    const peer = state.peers.get(peerId);
+    if (!peer || !state.myPeer || !state.localStream) return;
+    if (peer.stream) return;
+    if (peer.mediaConn) {
+      try {
+        peer.mediaConn.close();
+      } catch (_) {
+        /* ignore */
+      }
+      peer.mediaConn = null;
+    }
+    try {
+      const call = state.myPeer.call(peerId, state.localStream, {
+        metadata: {
+          name: state.displayName,
+          camOn: state.camOn && !state.mediaPlaceholder,
+          micOn: state.micOn && !state.mediaPlaceholder,
+        },
+      });
+      attachMediaConn(peerId, call);
+    } catch (err) {
+      log("dialMedia failed", peerId, err?.message || err);
+    }
+  }
+
+  function recallAllPeers() {
+    for (const [peerId, peer] of state.peers) {
+      peer.stream = peer.stream; // keep remote
+      if (shouldInitiateMedia(peerId)) {
+        peer.retries = 0;
+        dialMedia(peerId);
+        scheduleMeshRetry(peerId);
       }
     }
-
-    if (!peer.mediaConn && state.localStream && state.localPeerId < peerId) {
-      attachMediaConn(
-        peerId,
-        state.myPeer.call(peerId, state.localStream, {
-          metadata: {
-            name: state.displayName,
-            camOn: state.camOn,
-            micOn: state.micOn,
-          },
-        })
-      );
-    }
-    renderGrid();
   }
 
   function attachDataConn(peerId, conn) {
     const peer = ensurePeerRecord(peerId);
-    if (!peer) return;
+    if (!peer || !conn) return;
+
+    // Prefer an already-open connection if glare created two.
+    if (peer.dataConn?.open && peer.dataConn !== conn) {
+      try {
+        conn.close();
+      } catch (_) {
+        /* ignore */
+      }
+      return;
+    }
+
     peer.dataConn = conn;
+
     conn.on("open", () => {
-      conn.send({
-        type: "HELLO",
-        peerId: state.localPeerId,
-        name: state.displayName,
-        camOn: state.camOn,
-        micOn: state.micOn,
-      });
+      peer.retries = 0;
+      try {
+        conn.send({
+          type: "HELLO",
+          peerId: state.localPeerId,
+          name: state.displayName,
+          camOn: state.camOn && !state.mediaPlaceholder,
+          micOn: state.micOn && !state.mediaPlaceholder,
+        });
+      } catch (_) {
+        /* ignore */
+      }
+      if (shouldInitiateMedia(peerId)) dialMedia(peerId);
+      renderGrid();
     });
+
     conn.on("data", (msg) => onPeerData(peerId, msg));
-    conn.on("close", () => removePeer(peerId));
+
+    conn.on("close", () => {
+      if (peer.dataConn === conn) peer.dataConn = null;
+      // Don't drop the tile immediately — retry, unless peer left cleanly.
+      if (!peer.dead && state.roomCode) scheduleMeshRetry(peerId);
+    });
   }
 
   function attachMediaConn(peerId, call) {
-    const peer = ensurePeerRecord(peerId, call.metadata || {});
-    if (!peer) {
+    const peer = ensurePeerRecord(peerId, call?.metadata || {});
+    if (!peer || !call) {
       try {
-        call.close();
+        call?.close();
       } catch (_) {
         /* ignore */
       }
       return;
     }
     peer.mediaConn = call;
+
     call.on("stream", (stream) => {
       peer.stream = stream;
       peer.analyser = attachAnalyser(stream);
+      peer.retries = 0;
       startSpeakingLoop();
       renderGrid();
     });
+
     call.on("close", () => {
-      peer.mediaConn = null;
-      peer.stream = null;
-      renderGrid();
+      if (peer.mediaConn === call) {
+        peer.mediaConn = null;
+        peer.stream = null;
+        renderGrid();
+        if (!peer.dead && state.roomCode && shouldInitiateMedia(peerId)) {
+          scheduleMeshRetry(peerId);
+        }
+      }
+    });
+
+    call.on("error", () => {
+      if (peer.mediaConn === call) peer.mediaConn = null;
+      if (!peer.dead && shouldInitiateMedia(peerId)) scheduleMeshRetry(peerId);
     });
   }
 
@@ -644,17 +906,18 @@
     if (!msg || typeof msg !== "object") return;
     switch (msg.type) {
       case "HELLO":
-        ensurePeerRecord(fromId, msg);
-        if (state.localStream && state.localPeerId < fromId) ensureMeshPeer(fromId, msg);
-        renderGrid();
+        ensureMeshPeer(fromId, msg);
         break;
       case "PEER_JOINED":
         if (msg.peer?.id && msg.peer.id !== state.localPeerId) {
           ensureMeshPeer(msg.peer.id, msg.peer);
         }
         break;
+      case "PEER_LIST":
+        applyPeerList(msg.peers);
+        break;
       case "PEER_LEFT":
-        if (msg.peerId) removePeer(msg.peerId);
+        if (msg.peerId) removePeer(msg.peerId, { permanent: true });
         break;
       case "MEDIA_STATE": {
         const peer = state.peers.get(fromId);
@@ -690,9 +953,11 @@
     }
   }
 
-  function removePeer(peerId) {
+  function removePeer(peerId, { permanent = false } = {}) {
     const peer = state.peers.get(peerId);
     if (!peer) return;
+    peer.dead = permanent;
+    clearTimeout(peer.retryTimer);
     try {
       peer.mediaConn?.close();
     } catch (_) {
@@ -712,34 +977,19 @@
     state.localPeerId = peer.id;
 
     peer.on("connection", (conn) => {
-      const remoteId = conn.peer;
-      attachDataConn(remoteId, conn);
-      conn.on("open", () => {
-        if (
-          state.localStream &&
-          state.localPeerId < remoteId &&
-          !state.peers.get(remoteId)?.mediaConn
-        ) {
-          attachMediaConn(
-            remoteId,
-            state.myPeer.call(remoteId, state.localStream, {
-              metadata: {
-                name: state.displayName,
-                camOn: state.camOn,
-                micOn: state.micOn,
-              },
-            })
-          );
-        }
-      });
+      // Ignore signaling connections that somehow target us as hub id on personal peer.
+      if (isHubPeerId(conn.peer)) return;
+      attachDataConn(conn.peer, conn);
     });
 
     peer.on("call", async (call) => {
       try {
         if (!state.localStream) await ensureLocalMedia();
         call.answer(state.localStream);
-        attachMediaConn(call.peer, call);
         ensurePeerRecord(call.peer, call.metadata || {});
+        attachMediaConn(call.peer, call);
+        // If we are the media initiator, also make sure our outbound call exists.
+        if (shouldInitiateMedia(call.peer)) dialMedia(call.peer);
       } catch (err) {
         warn("answer failed", err);
       }
@@ -753,7 +1003,14 @@
       }
     });
 
-    peer.on("error", (err) => warn("peer error", err?.type || err));
+    peer.on("error", (err) => {
+      // Expected when dialing a peer/hub that is not registered yet.
+      if (err?.type === "peer-unavailable") {
+        log("peer-unavailable (will retry)", err?.message);
+        return;
+      }
+      warn("peer error", err?.type || err);
+    });
   }
 
   async function joinRoom(roomCode, { created = false } = {}) {
@@ -773,29 +1030,42 @@
       };
     }
 
+    const epoch = ++state.joinEpoch;
     state.joining = true;
     setRoomChrome();
     toast(created ? "Starting room…" : "Joining…");
 
     try {
       if (state.roomCode) await leaveRoom({ silent: true, keepStorage: true });
+      if (epoch !== state.joinEpoch) return { ok: false, error: "Superseded." };
 
-      await ensureLocalMedia();
+      // Prefer real camera; fall back to placeholder so signaling still works.
+      await ensureLocalMedia({ requireReal: false });
+      if (epoch !== state.joinEpoch) return { ok: false, error: "Superseded." };
 
       const myPeer = createPeer(personalIdFor(code));
       await waitForPeerOpen(myPeer);
+      if (epoch !== state.joinEpoch) {
+        destroyPeer(myPeer);
+        return { ok: false, error: "Superseded." };
+      }
       wirePersonalPeer(myPeer);
 
       state.roomCode = code;
-      state.camOn = state.camOnByDefault;
-      state.micOn = state.micOnByDefault;
-      state.localStream?.getVideoTracks().forEach((t) => (t.enabled = state.camOn));
-      state.localStream?.getAudioTracks().forEach((t) => (t.enabled = state.micOn));
+      if (!state.mediaPlaceholder) {
+        state.camOn = state.camOnByDefault;
+        state.micOn = state.micOnByDefault;
+        state.localStream?.getVideoTracks().forEach((t) => (t.enabled = state.camOn));
+        state.localStream?.getAudioTracks().forEach((t) => (t.enabled = state.micOn));
+      }
 
-      const reachedHub = await connectToHub(code);
+      // Discovery timeouts must not trigger hub re-election.
+      let reachedHub = await connectToHub(code, { discoverOnly: true });
       if (!reachedHub) {
         const became = await tryBecomeHub(code);
-        if (!became) await connectToHub(code);
+        if (!became) {
+          reachedHub = await connectToHub(code, { discoverOnly: false });
+        }
       }
 
       await chrome.storage.local.set({
@@ -803,7 +1073,13 @@
       });
 
       renderGrid();
-      toast(created ? `Room ${code} ready` : `Joined ${code}`);
+      toast(
+        state.mediaPlaceholder
+          ? `In ${code} — tap Enable camera`
+          : created
+            ? `Room ${code} ready`
+            : `Joined ${code}`
+      );
       return {
         ok: true,
         roomCode: code,
@@ -828,8 +1104,21 @@
   async function leaveRoom({ silent = false, keepStorage = false } = {}) {
     clearTimeout(state.hubReelectTimer);
     state.hubReelectTimer = null;
+    clearInterval(state.rosterTimer);
+    state.rosterTimer = null;
+
     broadcastData({ type: "PEER_LEFT", peerId: state.localPeerId });
-    for (const id of [...state.peers.keys()]) removePeer(id);
+    for (const id of [...state.peers.keys()]) {
+      removePeer(id, { permanent: true });
+    }
+
+    try {
+      state.hubConn?.close();
+    } catch (_) {
+      /* ignore */
+    }
+    state.hubConn = null;
+
     destroyPeer(state.hubPeer);
     state.hubPeer = null;
     state.isHub = false;
