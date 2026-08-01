@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FaceParty</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="fp-popup">
+      <header class="fp-popup__header">
+        <div class="fp-popup__brand">
+          <img src="icons/icon48.png" alt="" width="28" height="28" />
+          <div>
+            <h1>FaceParty</h1>
+            <p>Webcam reactions for watch parties</p>
+          </div>
+        </div>
+        <span id="fp-status" class="fp-popup__status">Idle</span>
+      </header>
+
+      <section class="fp-popup__section">
+        <label class="fp-label" for="fp-name">Display name</label>
+        <input
+          id="fp-name"
+          class="fp-input"
+          type="text"
+          maxlength="24"
+          placeholder="Your name"
+          autocomplete="off"
+        />
+      </section>
+
+      <section class="fp-popup__section fp-popup__toggles">
+        <label class="fp-toggle">
+          <input id="fp-cam-default" type="checkbox" checked />
+          <span>Camera on by default</span>
+        </label>
+        <label class="fp-toggle">
+          <input id="fp-mic-default" type="checkbox" checked />
+          <span>Mic on by default</span>
+        </label>
+      </section>
+
+      <section class="fp-popup__section">
+        <label class="fp-label" for="fp-join">Join room</label>
+        <div class="fp-row">
+          <input
+            id="fp-join"
+            class="fp-input"
+            type="text"
+            placeholder="Code or invite link"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button id="fp-join-btn" class="fp-btn fp-btn--primary" type="button">
+            Join
+          </button>
+        </div>
+        <p class="fp-hint">
+          Paste a code like <code>abcd12</code> or a link like
+          <code>https://faceparty.link/#room=abcd12</code>
+        </p>
+      </section>
+
+      <section class="fp-popup__actions">
+        <button id="fp-create-btn" class="fp-btn fp-btn--accent" type="button">
+          Create room &amp; copy link
+        </button>
+        <button id="fp-copy-btn" class="fp-btn" type="button" disabled>
+          Copy invite link
+        </button>
+        <button id="fp-leave-btn" class="fp-btn fp-btn--danger" type="button" disabled>
+          Leave room
+        </button>
+      </section>
+
+      <section id="fp-room-info" class="fp-popup__room" hidden>
+        <div>
+          <span class="fp-label">In room</span>
+          <strong id="fp-room-code">————</strong>
+        </div>
+        <div id="fp-peer-count" class="fp-popup__peers">1 person</div>
+      </section>
+
+      <details class="fp-popup__help">
+        <summary>How it works</summary>
+        <ol>
+          <li>Everyone installs the FaceParty extension.</li>
+          <li>Open the same streaming site (Netflix, YouTube, etc.) with Teleparty.</li>
+          <li>One person taps <strong>Create room</strong> and shares the invite link.</li>
+          <li>Friends paste the link here and tap <strong>Join</strong>.</li>
+          <li>Webcams appear in the top half of the Teleparty chat sidebar.</li>
+        </ol>
+        <p>
+          No account, no server bill — FaceParty uses PeerJS’s free public broker
+          for signaling and WebRTC for peer-to-peer video. Best for 2–6 people.
+        </p>
+      </details>
+
+      <p id="fp-toast" class="fp-toast" hidden></p>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

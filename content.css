@@ -1,0 +1,508 @@
+/**
+ * FaceParty content styles
+ * All classes are namespaced with `.fp-` so they don't clash with the host page
+ * or Teleparty. Tweak the CSS variables below to restyle the overlay.
+ */
+
+:root {
+  --fp-accent: #2ec4b6;
+  --fp-accent-2: #ff7a6a;
+  --fp-bg: rgba(12, 16, 22, 0.72);
+  --fp-bg-solid: #121820;
+  --fp-text: #f3f7fb;
+  --fp-muted: #9aabbb;
+  --fp-border: rgba(255, 255, 255, 0.12);
+  --fp-glow: rgba(46, 196, 182, 0.65);
+  --fp-radius: 14px;
+  --fp-tile-radius: 12px;
+  --fp-z: 2147483000;
+  --fp-font: "Segoe UI", "Avenir Next", "Helvetica Neue", sans-serif;
+  --fp-panel-h: 48%;
+}
+
+/* ========== Root shell (inserted into Teleparty sidebar or fallback) ========== */
+
+#fp-root {
+  all: initial;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: var(--fp-panel-h);
+  min-height: 120px;
+  max-height: 65%;
+  position: relative;
+  z-index: var(--fp-z);
+  font-family: var(--fp-font);
+  color: var(--fp-text);
+  flex-shrink: 0;
+}
+
+/* Extension iframe that owns camera + PeerJS (bypasses site Permissions-Policy). */
+#fp-root > .fp-frame,
+#fp-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+  background: transparent;
+  color-scheme: dark;
+}
+
+#fp-root *,
+#fp-root *::before,
+#fp-root *::after {
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+#fp-root.fp-collapsed {
+  height: 36px !important;
+  min-height: 36px;
+  max-height: 36px;
+}
+
+#fp-root.fp-collapsed > .fp-frame,
+#fp-root.fp-collapsed #fp-frame {
+  height: 36px;
+}
+
+#fp-root.fp-fallback {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 460px;
+  /* Fallback uses viewport height; --fp-panel-h is still the % control. */
+  height: var(--fp-panel-h);
+  max-height: 65vh;
+  min-height: 120px;
+  z-index: var(--fp-z);
+  pointer-events: auto;
+}
+
+#fp-root.fp-fallback.fp-collapsed {
+  height: 36px !important;
+  min-height: 36px;
+  max-height: 36px;
+}
+
+.fp-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  border-bottom: 1px solid var(--fp-border);
+  background:
+    linear-gradient(145deg, rgba(46, 196, 182, 0.14), transparent 40%),
+    linear-gradient(320deg, rgba(255, 122, 106, 0.12), transparent 45%),
+    var(--fp-bg);
+  backdrop-filter: blur(18px) saturate(1.35);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.fp-collapsed .fp-shell {
+  background: rgba(12, 16, 22, 0.88);
+}
+
+/* ========== Header / collapsed bar ========== */
+
+.fp-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  min-height: 36px;
+  flex-shrink: 0;
+  border-bottom: 1px solid transparent;
+}
+
+.fp-collapsed .fp-bar {
+  border-bottom: none;
+}
+
+.fp-bar__left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fp-logo {
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  background: linear-gradient(135deg, var(--fp-accent), var(--fp-accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  white-space: nowrap;
+}
+
+.fp-pill {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--fp-border);
+  color: var(--fp-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.fp-pill.is-live {
+  color: #06201c;
+  background: linear-gradient(135deg, var(--fp-accent), #8af0d4);
+  border-color: transparent;
+}
+
+.fp-bar__right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ========== Video grid ========== */
+
+.fp-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px 4px;
+  gap: 6px;
+}
+
+.fp-collapsed .fp-body {
+  display: none;
+}
+
+.fp-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 6px;
+  align-content: stretch;
+}
+
+/* Auto layouts by participant count (set via data-count on .fp-grid) */
+.fp-grid[data-count="1"] { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.fp-grid[data-count="2"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+.fp-grid[data-count="3"],
+.fp-grid[data-count="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.fp-grid[data-count="5"],
+.fp-grid[data-count="6"] { grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+.fp-tile {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--fp-tile-radius);
+  background: #0a0e13;
+  border: 2px solid transparent;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  animation: fp-tile-in 0.28s ease both;
+  min-height: 0;
+}
+
+@keyframes fp-tile-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.fp-tile.is-speaking {
+  border-color: var(--fp-glow);
+  box-shadow:
+    0 0 0 1px rgba(46, 196, 182, 0.35),
+    0 0 18px rgba(46, 196, 182, 0.35),
+    0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+.fp-tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: #0a0e13;
+}
+
+.fp-tile.is-local video {
+  transform: scaleX(-1); /* mirror self, like a mirror */
+}
+
+.fp-tile__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.55);
+  background:
+    radial-gradient(circle at 30% 30%, rgba(46, 196, 182, 0.25), transparent 50%),
+    radial-gradient(circle at 70% 70%, rgba(255, 122, 106, 0.2), transparent 45%),
+    #151b24;
+}
+
+.fp-tile__name {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  max-width: calc(100% - 48px);
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 650;
+  color: #fff;
+  background: rgba(8, 12, 18, 0.62);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.fp-tile__flags {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  gap: 3px;
+  pointer-events: none;
+}
+
+.fp-flag {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 12, 18, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #ffb4c0;
+}
+
+.fp-flag.is-on {
+  display: inline-flex;
+}
+
+.fp-flag svg {
+  width: 11px;
+  height: 11px;
+  fill: currentColor;
+}
+
+/* ========== Controls ========== */
+
+.fp-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 2px 0 4px;
+  flex-shrink: 0;
+}
+
+.fp-icon-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--fp-border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fp-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+  padding: 0;
+}
+
+.fp-icon-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(46, 196, 182, 0.45);
+}
+
+.fp-icon-btn:active {
+  transform: translateY(0);
+}
+
+.fp-icon-btn.is-off {
+  color: #ffb4c0;
+  border-color: rgba(255, 92, 122, 0.4);
+  background: rgba(255, 92, 122, 0.12);
+}
+
+.fp-icon-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.fp-icon-btn--sm {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.fp-icon-btn--sm svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* ========== Resize handle ========== */
+
+.fp-resize {
+  height: 6px;
+  flex-shrink: 0;
+  cursor: ns-resize;
+  position: relative;
+  background: transparent;
+}
+
+.fp-collapsed .fp-resize {
+  display: none;
+}
+
+.fp-resize::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 1px;
+  width: 42px;
+  height: 3px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+  transition: background 0.15s ease, width 0.15s ease;
+}
+
+.fp-resize:hover::after,
+.fp-resize.is-dragging::after {
+  background: var(--fp-accent);
+  width: 56px;
+}
+
+/* ========== Permission / empty states ========== */
+
+.fp-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 8px;
+  padding: 12px;
+}
+
+.fp-empty h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fp-text);
+}
+
+.fp-empty p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--fp-muted);
+  max-width: 260px;
+}
+
+.fp-empty__actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.fp-btn {
+  border: 1px solid var(--fp-border);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fp-text);
+  border-radius: 9px;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.15s ease;
+}
+
+.fp-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.fp-btn--accent {
+  border: none;
+  color: #081018;
+  background: linear-gradient(135deg, var(--fp-accent), var(--fp-accent-2));
+}
+
+/* ========== In-page toast ========== */
+
+.fp-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 44px;
+  transform: translateX(-50%) translateY(6px);
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(8, 12, 18, 0.9);
+  border: 1px solid rgba(46, 196, 182, 0.35);
+  color: #d8fff7;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 5;
+  white-space: nowrap;
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fp-toast.is-show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ========== Marker class applied to Teleparty containers we tweak ========== */
+
+.fp-tp-sidebar-flex {
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.fp-tp-messages-shrunk {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow: auto !important;
+}

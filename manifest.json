@@ -1,0 +1,96 @@
+{
+  "manifest_version": 3,
+  "name": "FaceParty",
+  "version": "1.0.1",
+  "description": "Live webcam reactions overlaid in the Teleparty chat sidebar — peer-to-peer, no server required.",
+  "permissions": ["storage", "scripting"],
+  "host_permissions": [
+    "*://netflix.com/*",
+    "*://*.netflix.com/*",
+    "*://youtube.com/*",
+    "*://*.youtube.com/*",
+    "*://disneyplus.com/*",
+    "*://*.disneyplus.com/*",
+    "*://hulu.com/*",
+    "*://*.hulu.com/*",
+    "*://hbomax.com/*",
+    "*://*.hbomax.com/*",
+    "*://max.com/*",
+    "*://*.max.com/*",
+    "*://primevideo.com/*",
+    "*://*.primevideo.com/*",
+    "*://amazon.com/*",
+    "*://*.amazon.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "FaceParty",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://netflix.com/*",
+        "*://*.netflix.com/*",
+        "*://youtube.com/*",
+        "*://*.youtube.com/*",
+        "*://disneyplus.com/*",
+        "*://*.disneyplus.com/*",
+        "*://hulu.com/*",
+        "*://*.hulu.com/*",
+        "*://hbomax.com/*",
+        "*://*.hbomax.com/*",
+        "*://max.com/*",
+        "*://*.max.com/*",
+        "*://primevideo.com/*",
+        "*://*.primevideo.com/*",
+        "*://amazon.com/*",
+        "*://*.amazon.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "panel.html",
+        "panel.js",
+        "content.css",
+        "lib/peerjs.min.js",
+        "icons/*"
+      ],
+      "matches": [
+        "*://netflix.com/*",
+        "*://*.netflix.com/*",
+        "*://youtube.com/*",
+        "*://*.youtube.com/*",
+        "*://disneyplus.com/*",
+        "*://*.disneyplus.com/*",
+        "*://hulu.com/*",
+        "*://*.hulu.com/*",
+        "*://hbomax.com/*",
+        "*://*.hbomax.com/*",
+        "*://max.com/*",
+        "*://*.max.com/*",
+        "*://primevideo.com/*",
+        "*://*.primevideo.com/*",
+        "*://amazon.com/*",
+        "*://*.amazon.com/*"
+      ]
+    }
+  ]
+}

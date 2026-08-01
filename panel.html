@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FaceParty</title>
+    <link rel="stylesheet" href="content.css" />
+    <style>
+      /* Panel runs inside an extension iframe — fill the host dock. */
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+      }
+      #fp-root {
+        height: 100% !important;
+        max-height: none !important;
+        min-height: 0 !important;
+      }
+      #fp-root.fp-collapsed {
+        height: 100% !important;
+      }
+      /* Resize handle lives in the content-script host, not here. */
+      .fp-resize {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="fp-root">
+      <div class="fp-shell">
+        <div class="fp-bar">
+          <div class="fp-bar__left">
+            <span class="fp-logo">FaceParty</span>
+            <span class="fp-pill" id="fp-room-pill">Not connected</span>
+          </div>
+          <div class="fp-bar__right">
+            <button
+              type="button"
+              class="fp-icon-btn fp-icon-btn--sm"
+              id="fp-collapse-btn"
+              title="Collapse / expand"
+            ></button>
+          </div>
+        </div>
+        <div class="fp-body">
+          <div class="fp-empty" id="fp-empty">
+            <h2>Watch together, react live</h2>
+            <p>
+              Create or join a room from the FaceParty toolbar icon. Everyone needs
+              the extension, then share the invite link.
+            </p>
+            <div class="fp-empty__actions">
+              <button type="button" class="fp-btn fp-btn--accent" id="fp-empty-create">
+                Create room
+              </button>
+              <button type="button" class="fp-btn" id="fp-empty-join">Join…</button>
+            </div>
+          </div>
+          <div class="fp-grid" id="fp-grid" data-count="1" hidden></div>
+          <div class="fp-controls" id="fp-controls" hidden>
+            <button type="button" class="fp-icon-btn" id="fp-cam-btn" title="Toggle camera"></button>
+            <button type="button" class="fp-icon-btn" id="fp-mic-btn" title="Toggle mic"></button>
+            <button type="button" class="fp-icon-btn" id="fp-link-btn" title="Copy invite link"></button>
+            <button type="button" class="fp-icon-btn" id="fp-leave-btn" title="Leave room"></button>
+          </div>
+        </div>
+        <div class="fp-toast" id="fp-toast"></div>
+      </div>
+    </div>
+    <script src="lib/peerjs.min.js"></script>
+    <script src="panel.js"></script>
+  </body>
+</html>
