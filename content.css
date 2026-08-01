@@ -20,17 +20,17 @@
   --fp-panel-h: 48%;
 }
 
-/* ========== Root shell (inserted into Teleparty sidebar or fallback) ========== */
+/* ========== Slim launcher in Teleparty sidebar (camera is in floating window) ========== */
 
-#fp-root {
+#fp-root,
+#fp-root.fp-launcher-root {
   all: initial;
   box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
+  display: block;
   width: 100%;
-  height: var(--fp-panel-h);
-  min-height: 120px;
-  max-height: 65%;
+  height: auto;
+  min-height: 0;
+  max-height: none;
   position: relative;
   z-index: var(--fp-z);
   font-family: var(--fp-font);
@@ -38,16 +38,45 @@
   flex-shrink: 0;
 }
 
-/* Extension iframe that owns camera + PeerJS (bypasses site Permissions-Policy). */
-#fp-root > .fp-frame,
-#fp-frame {
-  flex: 1 1 auto;
-  width: 100%;
-  min-height: 0;
-  border: 0;
-  display: block;
-  background: transparent;
-  color-scheme: dark;
+#fp-root.fp-launcher-fallback {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  width: 320px;
+  z-index: var(--fp-z);
+}
+
+.fp-launcher {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--fp-border);
+  background:
+    linear-gradient(145deg, rgba(46, 196, 182, 0.14), transparent 50%),
+    rgba(12, 16, 22, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.fp-launcher__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fp-launcher__status {
+  font-size: 11px;
+  color: var(--fp-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fp-launcher__actions {
+  flex-shrink: 0;
 }
 
 #fp-root *,

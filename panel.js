@@ -1,12 +1,11 @@
 /**
- * FaceParty — panel (runs inside chrome-extension:// iframe)
+ * FaceParty — floating panel (top-level chrome-extension:// window)
  *
- * IMPORTANT: Camera/mic + PeerJS live HERE, not in the Netflix page.
- * Streaming sites often set Permissions-Policy that blocks getUserMedia in
- * page/content-script contexts. An extension-origin iframe is allowed to
- * request camera/mic with allow="camera; microphone".
+ * Camera/mic + PeerJS run HERE. This is a real extension window (not an
+ * iframe inside Netflix), so Chrome can grant camera access normally.
  *
- * The content script only docks this iframe into the Teleparty sidebar.
+ * The content script on the streaming site only shows a slim "Open window"
+ * launcher in the Teleparty sidebar.
  */
 
 (() => {
@@ -175,6 +174,17 @@
     state.panelCollapsed = !state.panelCollapsed;
     await chrome.storage.local.set({ panelCollapsed: state.panelCollapsed });
     applyCollapsedChrome();
+    // Shrink/expand the floating OS window for a tidy collapsed bar.
+    try {
+      const win = await chrome.windows.getCurrent();
+      if (win?.id != null) {
+        await chrome.windows.update(win.id, {
+          height: state.panelCollapsed ? 86 : 540,
+        });
+      }
+    } catch (_) {
+      /* ignore */
+    }
   }
 
   function updateMediaButtons() {
@@ -1284,6 +1294,11 @@
     applyCollapsedChrome();
     setRoomChrome();
     postToHost({ type: "READY" });
+    try {
+      await chrome.runtime.sendMessage({ type: "PANEL_READY" });
+    } catch (_) {
+      /* ignore */
+    }
 
     if (stored.activeRoom?.code) {
       log("Auto-rejoining", stored.activeRoom.code);

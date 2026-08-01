@@ -1,159 +1,56 @@
 /**
  * FaceParty — content script (host page)
  *
- * Responsibilities:
- *  1) Find Teleparty's chat sidebar (or fall back to top-right)
- *  2) Dock an extension-origin iframe that runs camera + PeerJS
- *  3) Relay popup/background commands into that iframe
- *  4) Drag-resize / collapse the dock height
- *
- * Camera/WebRTC intentionally do NOT run here — Netflix and other streamers
- * often block getUserMedia via Permissions-Policy on the page origin.
+ * Slim launcher docked into the Teleparty chat sidebar.
+ * Camera + PeerJS run in a floating chrome-extension window (not here),
+ * because Netflix blocks getUserMedia inside page iframes.
  */
 
 (() => {
   "use strict";
 
-  const DEBUG = false;
-  const MIN_PANEL_PCT = 25;
-  const MAX_PANEL_PCT = 65;
-  const DEFAULT_PANEL_PCT = 48;
-  const PANEL_URL = chrome.runtime.getURL("panel.html");
-
   const state = {
-    panelHeightPct: DEFAULT_PANEL_PCT,
-    panelCollapsed: false,
     dock: { mode: null, sidebar: null, messages: null, toolbar: null },
     observer: null,
-    pending: new Map(), // requestId -> {resolve, timer}
-    lastSession: null,
-    iframeReady: false,
+    roomCode: null,
   };
 
   let root;
-  let frame;
-  let resizeHandle;
 
-  function log(...args) {
-    if (DEBUG) console.log("[FaceParty:host]", ...args);
-  }
-
-  function clamp(n, min, max) {
-    return Math.min(max, Math.max(min, n));
-  }
-
-  async function loadSettings() {
-    const stored = await chrome.storage.local.get([
-      "panelHeightPct",
-      "panelCollapsed",
-    ]);
-    state.panelHeightPct = clamp(
-      Number(stored.panelHeightPct) || DEFAULT_PANEL_PCT,
-      MIN_PANEL_PCT,
-      MAX_PANEL_PCT
-    );
-    state.panelCollapsed = Boolean(stored.panelCollapsed);
-  }
-
-  function buildHost() {
+  function buildLauncher() {
     if (document.getElementById("fp-root")) {
       root = document.getElementById("fp-root");
-      frame = document.getElementById("fp-frame");
-      resizeHandle = document.getElementById("fp-resize");
       return;
     }
 
     root = document.createElement("div");
     root.id = "fp-root";
-
-    frame = document.createElement("iframe");
-    frame.id = "fp-frame";
-    frame.className = "fp-frame";
-    frame.src = PANEL_URL;
-    // Permissions-Policy: name the extension origin explicitly (required on
-    // locked-down hosts). 'src' also allows this frame's own origin.
-    const extOrigin = new URL(PANEL_URL).origin;
-    const allow = [
-      `camera ${extOrigin}`,
-      `microphone ${extOrigin}`,
-      "camera 'src'",
-      "microphone 'src'",
-      "autoplay 'src'",
-      "clipboard-write 'src'",
-    ].join("; ");
-    frame.setAttribute("allow", allow);
-    frame.allow = allow;
-
-    resizeHandle = document.createElement("div");
-    resizeHandle.id = "fp-resize";
-    resizeHandle.className = "fp-resize";
-    resizeHandle.title = "Drag to resize";
-
-    root.append(frame, resizeHandle);
+    root.className = "fp-launcher-root";
+    root.innerHTML = `
+      <div class="fp-launcher">
+        <div class="fp-launcher__text">
+          <span class="fp-logo">FaceParty</span>
+          <span class="fp-launcher__status" id="fp-launch-status">Webcams open in a floating window</span>
+        </div>
+        <div class="fp-launcher__actions">
+          <button type="button" class="fp-btn fp-btn--accent" id="fp-open-window">Open window</button>
+        </div>
+      </div>
+    `;
     document.documentElement.appendChild(root);
-    setupResizeHandle();
-    applyChrome();
+
+    root.querySelector("#fp-open-window").addEventListener("click", () => {
+      chrome.runtime.sendMessage({ type: "OPEN_FLOATING_PANEL" }).catch(() => {});
+    });
   }
 
-  function applyChrome() {
-    if (!root) return;
-    root.style.setProperty("--fp-panel-h", `${state.panelHeightPct}%`);
-    root.classList.toggle("fp-collapsed", state.panelCollapsed);
-    if (state.panelCollapsed) {
-      // Keep a slim bar so Expand is reachable inside the iframe.
-      root.style.setProperty("--fp-panel-h", "36px");
-    }
+  function updateStatus() {
+    const el = document.getElementById("fp-launch-status");
+    if (!el) return;
+    el.textContent = state.roomCode
+      ? `Room ${state.roomCode} · floating window`
+      : "Webcams open in a floating window";
   }
-
-  function setupResizeHandle() {
-    let dragging = false;
-
-    const onMove = (e) => {
-      if (!dragging || !root) return;
-      const clientY = e.clientY ?? e.touches?.[0]?.clientY;
-      if (clientY == null) return;
-
-      if (state.dock.mode === "sidebar" && state.dock.sidebar) {
-        const bounds = state.dock.sidebar.getBoundingClientRect();
-        state.panelHeightPct = Math.round(
-          clamp(((clientY - bounds.top) / bounds.height) * 100, MIN_PANEL_PCT, MAX_PANEL_PCT)
-        );
-      } else {
-        state.panelHeightPct = Math.round(
-          clamp((clientY / window.innerHeight) * 100, MIN_PANEL_PCT, MAX_PANEL_PCT)
-        );
-      }
-      applyChrome();
-      updateDockLayout();
-    };
-
-    const onUp = async () => {
-      if (!dragging) return;
-      dragging = false;
-      resizeHandle.classList.remove("is-dragging");
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      document.removeEventListener("touchmove", onMove);
-      document.removeEventListener("touchend", onUp);
-      await chrome.storage.local.set({ panelHeightPct: state.panelHeightPct });
-    };
-
-    const onDown = (e) => {
-      if (state.panelCollapsed) return;
-      e.preventDefault();
-      dragging = true;
-      resizeHandle.classList.add("is-dragging");
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
-      document.addEventListener("touchmove", onMove, { passive: false });
-      document.addEventListener("touchend", onUp);
-    };
-
-    resizeHandle.addEventListener("mousedown", onDown);
-    resizeHandle.addEventListener("touchstart", onDown, { passive: false });
-  }
-
-  // ---------- Teleparty docking heuristics ----------
 
   function findTelepartySidebar() {
     const candidates = [];
@@ -184,8 +81,7 @@
         score:
           (hasInput ? 5 : 0) +
           (mentionsMessage ? 3 : 0) +
-          (rect.width > 400 && rect.width < 500 ? 2 : 0) +
-          (style.position === "fixed" ? 1 : 0),
+          (rect.width > 400 && rect.width < 500 ? 2 : 0),
       });
     }
 
@@ -217,7 +113,8 @@
     });
     if (scrollers.length) {
       scrollers.sort(
-        (a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height
+        (a, b) =>
+          b.getBoundingClientRect().height - a.getBoundingClientRect().height
       );
       return scrollers[0];
     }
@@ -229,23 +126,10 @@
     state.dock.sidebar?.classList.remove("fp-tp-sidebar-flex");
     state.dock.messages?.classList.remove("fp-tp-messages-shrunk");
     if (state.dock.messages) {
-      state.dock.messages.style.removeProperty("max-height");
-      state.dock.messages.style.removeProperty("height");
       state.dock.messages.style.removeProperty("flex");
       state.dock.messages.style.removeProperty("min-height");
       state.dock.messages.style.removeProperty("overflow");
     }
-  }
-
-  function updateDockLayout() {
-    if (state.dock.mode !== "sidebar" || !state.dock.sidebar || !state.dock.messages) {
-      return;
-    }
-    state.dock.sidebar.classList.add("fp-tp-sidebar-flex");
-    state.dock.messages.classList.add("fp-tp-messages-shrunk");
-    state.dock.messages.style.flex = "1 1 auto";
-    state.dock.messages.style.minHeight = "0";
-    state.dock.messages.style.overflow = "auto";
   }
 
   function dockIntoSidebar(sidebar) {
@@ -261,9 +145,12 @@
       toolbar.insertAdjacentElement("afterend", root);
     }
     sidebar.classList.add("fp-tp-sidebar-flex");
-    applyChrome();
-    updateDockLayout();
-    log("Docked into sidebar");
+    if (messages) {
+      messages.classList.add("fp-tp-messages-shrunk");
+      messages.style.flex = "1 1 auto";
+      messages.style.minHeight = "0";
+      messages.style.overflow = "auto";
+    }
     return true;
   }
 
@@ -273,13 +160,12 @@
     if (root.parentElement !== document.documentElement) {
       document.documentElement.appendChild(root);
     }
-    root.classList.add("fp-fallback");
-    applyChrome();
-    log("Fallback dock");
+    root.classList.add("fp-fallback", "fp-launcher-fallback");
   }
 
   function ensureDocked() {
-    buildHost();
+    buildLauncher();
+    updateStatus();
     const sidebar = findTelepartySidebar();
     if (sidebar) {
       if (
@@ -288,8 +174,6 @@
         !sidebar.contains(root)
       ) {
         dockIntoSidebar(sidebar);
-      } else {
-        updateDockLayout();
       }
     } else if (state.dock.mode !== "fallback") {
       dockFallback();
@@ -314,140 +198,49 @@
     setInterval(ensureDocked, 2500);
   }
 
-  // ---------- iframe RPC ----------
-
-  function callPanel(message, timeoutMs = 20000) {
-    return new Promise((resolve) => {
-      ensureDocked();
-      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const timer = setTimeout(() => {
-        state.pending.delete(requestId);
-        resolve({
-          ok: false,
-          error:
-            "FaceParty panel did not respond. Reload the Netflix tab and try again.",
-        });
-      }, timeoutMs);
-
-      state.pending.set(requestId, { resolve, timer });
-
-      const send = () => {
-        try {
-          frame.contentWindow?.postMessage(
-            { target: "faceparty-panel", requestId, ...message },
-            chrome.runtime.getURL("/")
-          );
-        } catch (err) {
-          // Fallback: some environments dislike targetOrigin quirks
-          frame.contentWindow?.postMessage(
-            { target: "faceparty-panel", requestId, ...message },
-            "*"
-          );
-        }
-      };
-
-      if (state.iframeReady) send();
-      else {
-        // Wait briefly for READY, then send anyway.
-        const wait = setInterval(() => {
-          if (state.iframeReady) {
-            clearInterval(wait);
-            send();
-          }
-        }, 50);
-        setTimeout(() => {
-          clearInterval(wait);
-          send();
-        }, 1500);
-      }
-    });
-  }
-
-  window.addEventListener("message", (event) => {
-    const data = event.data;
-    if (!data || data.source !== "faceparty-panel") return;
-
-    if (data.type === "READY") {
-      state.iframeReady = true;
-      log("Panel ready");
-      return;
-    }
-
-    if (data.type === "SET_COLLAPSED") {
-      state.panelCollapsed = Boolean(data.collapsed);
-      applyChrome();
-      updateDockLayout();
-      return;
-    }
-
-    if (data.type === "SESSION") {
-      state.lastSession = data.session || null;
-      return;
-    }
-
-    if (data.type === "COMMAND_RESULT" && data.requestId) {
-      const pending = state.pending.get(data.requestId);
-      if (!pending) return;
-      clearTimeout(pending.timer);
-      state.pending.delete(data.requestId);
-      pending.resolve(data.result);
-    }
-  });
-
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    (async () => {
-      // Fast path: session cache for popup refresh
-      if (message?.type === "GET_SESSION") {
-        const live = await callPanel({ type: "GET_SESSION" }, 4000);
-        if (live?.ok) {
-          state.lastSession = live.session;
-          sendResponse(live);
-        } else {
-          sendResponse({ ok: true, session: state.lastSession });
-        }
-        return;
-      }
-
-      if (message?.type === "HOST_PING") {
-        ensureDocked();
-        sendResponse({ ok: true, ready: true });
-        return;
-      }
-
-      // Everything else is handled inside the extension iframe panel.
-      const result = await callPanel(message);
-      sendResponse(result);
-    })();
-    return true;
+    if (message?.type === "HOST_PING") {
+      ensureDocked();
+      sendResponse({ ok: true, ready: true });
+      return true;
+    }
+    // Room commands are handled by the floating panel — ignore here.
+    if (
+      message?.type === "JOIN_ROOM" ||
+      message?.type === "CREATE_ROOM" ||
+      message?.type === "LEAVE_ROOM" ||
+      message?.type === "GET_SESSION" ||
+      message?.type === "COPY_INVITE" ||
+      message?.type === "TOGGLE_CAM" ||
+      message?.type === "TOGGLE_MIC" ||
+      message?.type === "SETTINGS_CHANGED" ||
+      message?.type === "MEDIA_PERMISSION_GRANTED"
+    ) {
+      sendResponse({ ok: true, ignoredByHost: true });
+      return true;
+    }
+    return false;
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
-    if (changes.panelHeightPct) {
-      state.panelHeightPct = clamp(
-        Number(changes.panelHeightPct.newValue) || DEFAULT_PANEL_PCT,
-        MIN_PANEL_PCT,
-        MAX_PANEL_PCT
-      );
-      applyChrome();
-      updateDockLayout();
-    }
-    if (changes.panelCollapsed) {
-      state.panelCollapsed = Boolean(changes.panelCollapsed.newValue);
-      applyChrome();
-      updateDockLayout();
-    }
-    // When popup/background sets activeRoom, make sure the dock is visible
-    // so the panel iframe can join (it also watches storage itself).
-    if (changes.activeRoom?.newValue?.code) {
+    if (changes.activeRoom) {
+      state.roomCode = changes.activeRoom.newValue?.code || null;
+      updateStatus();
       ensureDocked();
+      if (state.roomCode) {
+        // Nudge the floating window open when a room becomes active.
+        chrome.runtime
+          .sendMessage({ type: "OPEN_FLOATING_PANEL" })
+          .catch(() => {});
+      }
     }
   });
 
   (async function init() {
-    await loadSettings();
+    const stored = await chrome.storage.local.get("activeRoom");
+    state.roomCode = stored.activeRoom?.code || null;
     ensureDocked();
     startDockObserver();
-    log("Host initialized on", location.hostname);
   })();
 })();

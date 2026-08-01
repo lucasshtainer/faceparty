@@ -129,11 +129,9 @@ els.createBtn.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(res.inviteLink);
       showToast(
-        res.needsMediaPermission
-          ? "Link copied! Allow camera in the FaceParty window."
-          : res.joinWarning
-            ? "Link copied. Reload Netflix if the panel doesn’t appear."
-            : "Room created — invite link copied!"
+        res.joinWarning
+          ? "Link copied. Check the FaceParty window + Allow camera."
+          : "Room created — FaceParty window opened!"
       );
     } catch {
       showToast(`Room ${res.roomCode} created. Use Copy invite link.`);

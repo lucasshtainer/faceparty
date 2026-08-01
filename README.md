@@ -6,12 +6,14 @@ FaceParty is a **standalone** Chrome extension (Manifest V3). It does not modify
 
 ## Features
 
-- Webcam + mic grid docked into Teleparty’s right chat sidebar (top ~50%)
-- Chat messages + “Type a message…” stay visible and usable in the bottom half
-- Drag handle to resize the video area (25–65%); collapse to a slim bar
+- Webcam + mic grid in a **floating FaceParty window** (reliable camera access)
+- Slim launcher bar docked into the Teleparty chat sidebar (“Open window”)
 - Rooms via 6-character codes and shareable invite links
 - Mesh WebRTC for 2–6 people using PeerJS’s free public broker
 - Glassmorphic UI, active-speaker glow, cam/mic toggles
+
+> Why a floating window? Chrome often blocks `getUserMedia` inside Netflix page
+> iframes. A top-level extension window can use the camera normally.
 
 ## Install (Load unpacked)
 
@@ -22,12 +24,12 @@ FaceParty is a **standalone** Chrome extension (Manifest V3). It does not modify
 5. Pin FaceParty from the puzzle-piece menu for easy access
 6. **Reload your Netflix (or other) tab** after installing or updating — required so the content script mounts
 
-### If Create seems to do nothing
+### If the camera doesn’t appear
 
-1. Confirm the Netflix tab is focused (not the extensions page)
-2. Reload that Netflix tab, then click **Create room** again
-3. When Chrome asks for camera/mic, click **Allow** — the prompt appears for the FaceParty panel (extension), not always as a Netflix permission
-4. Look for the FaceParty bar in the top of the Teleparty chat (or top-right if chat isn’t detected yet)
+1. Reload the extension + Netflix tab
+2. Click **Create room** — a floating FaceParty window should open
+3. Click **Allow** on Chrome’s camera/mic prompt (or **Enable camera** in the window)
+4. Keep that floating window open while you watch
 
 ## Start a watch party
 

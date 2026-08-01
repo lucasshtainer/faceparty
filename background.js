@@ -1,10 +1,8 @@
 /**
  * FaceParty — background service worker (Manifest V3)
  *
- * - Stores defaults
- * - Creates room codes immediately (so the popup never waits on camera/PeerJS)
- * - Injects the content script if the tab was open before the extension loaded
- * - Forwards commands to the content script (which relays into the panel iframe)
+ * Owns the floating FaceParty window (where camera + PeerJS actually run).
+ * The Netflix content script only shows a slim launcher bar in the chat sidebar.
  */
 
 const DEFAULTS = {
@@ -14,6 +12,7 @@ const DEFAULTS = {
   panelHeightPct: 48,
   panelCollapsed: false,
   activeRoom: null,
+  mediaPermissionGranted: false,
 };
 
 const MATCH_HOSTS = [
@@ -26,6 +25,9 @@ const MATCH_HOSTS = [
   "primevideo.com",
   "amazon.com",
 ];
+
+/** @type {number | null} */
+let floatingWindowId = null;
 
 function inviteLink(code) {
   return `https://faceparty.link/#room=${code}`;
@@ -49,6 +51,18 @@ function isSupportedUrl(url) {
   }
 }
 
+function panelUrl() {
+  return chrome.runtime.getURL("panel.html");
+}
+
+function permissionUrl() {
+  return chrome.runtime.getURL("permission.html");
+}
+
+function delay(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   const stored = await chrome.storage.local.get(null);
   const patch = {};
@@ -58,22 +72,21 @@ chrome.runtime.onInstalled.addListener(async () => {
   if (Object.keys(patch).length) await chrome.storage.local.set(patch);
 });
 
+chrome.windows.onRemoved.addListener((id) => {
+  if (id === floatingWindowId) floatingWindowId = null;
+});
+
 async function getActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab || null;
 }
 
-/**
- * Inject content script + CSS if the tab doesn't have FaceParty yet
- * (common right after Load unpacked — existing Netflix tabs need a refresh
- * or this injection).
- */
 async function ensureContentScript(tabId) {
   try {
     const ping = await chrome.tabs.sendMessage(tabId, { type: "HOST_PING" });
     if (ping?.ok) return true;
   } catch (_) {
-    // Not injected yet.
+    /* not injected */
   }
 
   try {
@@ -85,8 +98,7 @@ async function ensureContentScript(tabId) {
       target: { tabId },
       files: ["content.js"],
     });
-    // Give the host a moment to mount the iframe.
-    await new Promise((r) => setTimeout(r, 150));
+    await delay(100);
     return true;
   } catch (err) {
     console.warn("[FaceParty] inject failed", err);
@@ -94,41 +106,101 @@ async function ensureContentScript(tabId) {
   }
 }
 
-async function sendToActiveTab(message) {
-  const tab = await getActiveTab();
-  if (!tab?.id) {
-    return { ok: false, error: "No active tab." };
-  }
-  if (!isSupportedUrl(tab.url)) {
-    return {
-      ok: false,
-      error:
-        "Open a Netflix / YouTube / Disney+ / Hulu / Max / Prime Video tab first, then click Create.",
-    };
+/**
+ * Open or focus the floating FaceParty window.
+ * Camera works here because this is a top-level chrome-extension:// page.
+ */
+async function openFloatingPanel({ focus = true } = {}) {
+  const url = panelUrl();
+
+  if (floatingWindowId != null) {
+    try {
+      await chrome.windows.update(floatingWindowId, { focused: focus });
+      return { ok: true, windowId: floatingWindowId, reused: true };
+    } catch (_) {
+      floatingWindowId = null;
+    }
   }
 
-  const injected = await ensureContentScript(tab.id);
-  if (!injected) {
-    return {
-      ok: false,
-      error: "Could not start FaceParty on this tab. Reload the page and try again.",
-    };
+  const existing = await chrome.windows.getAll({ populate: true });
+  for (const win of existing) {
+    const hit = win.tabs?.find(
+      (t) => t.url === url || (t.url && t.url.startsWith(url))
+    );
+    if (hit && win.id != null) {
+      floatingWindowId = win.id;
+      if (focus) await chrome.windows.update(win.id, { focused: true });
+      return { ok: true, windowId: win.id, reused: true };
+    }
   }
 
+  // Place near the right edge so it sits beside typical Teleparty chat.
+  let left = 80;
+  let top = 80;
   try {
-    return await chrome.tabs.sendMessage(tab.id, message);
-  } catch (err) {
-    return {
-      ok: false,
-      error:
-        "FaceParty isn't running on this tab. Reload Netflix and try again.",
-    };
+    const current = await chrome.windows.getLastFocused();
+    if (current?.width != null && current.left != null) {
+      left = Math.max(0, current.left + (current.width || 1200) - 460);
+      top = Math.max(0, (current.top || 0) + 60);
+    }
+  } catch (_) {
+    /* ignore */
+  }
+
+  const win = await chrome.windows.create({
+    url,
+    type: "popup",
+    width: 400,
+    height: 540,
+    left,
+    top,
+    focused: focus,
+  });
+  floatingWindowId = win.id ?? null;
+  return { ok: true, windowId: floatingWindowId, reused: false };
+}
+
+async function getFloatingPanelTabId() {
+  if (floatingWindowId == null) {
+    const opened = await openFloatingPanel({ focus: false });
+    if (!opened.ok) return null;
+  }
+  try {
+    const win = await chrome.windows.get(floatingWindowId, { populate: true });
+    return win.tabs?.[0]?.id ?? null;
+  } catch (_) {
+    floatingWindowId = null;
+    return null;
   }
 }
 
-/** Open (or focus) the top-level page that can actually prompt for camera/mic. */
+/** Send a message to the floating panel, retrying briefly while it boots. */
+async function sendToFloatingPanel(message, { open = true } = {}) {
+  if (open) await openFloatingPanel({ focus: true });
+  let tabId = await getFloatingPanelTabId();
+  if (tabId == null && open) {
+    await openFloatingPanel({ focus: true });
+    tabId = await getFloatingPanelTabId();
+  }
+  if (tabId == null) {
+    return { ok: false, error: "Could not open FaceParty window." };
+  }
+
+  for (let i = 0; i < 25; i++) {
+    try {
+      return await chrome.tabs.sendMessage(tabId, message);
+    } catch (_) {
+      await delay(120);
+    }
+  }
+  return {
+    ok: false,
+    error: "FaceParty window is open but not ready yet — try again in a second.",
+  };
+}
+
 async function openMediaPermissionWindow() {
-  const url = chrome.runtime.getURL("permission.html");
+  const url = permissionUrl();
   const existing = await chrome.windows.getAll({ populate: true });
   for (const win of existing) {
     const hit = win.tabs?.find((t) => t.url === url);
@@ -137,7 +209,6 @@ async function openMediaPermissionWindow() {
       return { ok: true, reused: true };
     }
   }
-
   await chrome.windows.create({
     url,
     type: "popup",
@@ -148,92 +219,78 @@ async function openMediaPermissionWindow() {
   return { ok: true, reused: false };
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+async function startRoom(code) {
+  const tab = await getActiveTab();
+  if (!tab?.id || !isSupportedUrl(tab.url)) {
+    return {
+      ok: false,
+      error:
+        "Open a Netflix / YouTube / Disney+ / Hulu / Max / Prime Video tab first.",
+    };
+  }
+
+  await chrome.storage.local.set({
+    activeRoom: { code, joinedAt: Date.now() },
+  });
+
+  // Sidebar launcher strip (no camera there).
+  ensureContentScript(tab.id).catch(() => {});
+
+  // Open the floating window immediately. Don't await join/getUserMedia —
+  // the panel auto-joins from storage when it boots (and retries on message).
+  await openFloatingPanel({ focus: true });
+  sendToFloatingPanel({ type: "JOIN_ROOM", roomCode: code }, { open: false }).catch(
+    () => {}
+  );
+
+  return {
+    ok: true,
+    roomCode: code,
+    inviteLink: inviteLink(code),
+    session: { roomCode: code, peerCount: 1 },
+  };
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     switch (message?.type) {
+      case "OPEN_FLOATING_PANEL": {
+        sendResponse(await openFloatingPanel({ focus: true }));
+        break;
+      }
+
       case "OPEN_MEDIA_PERMISSION": {
         sendResponse(await openMediaPermissionWindow());
         break;
       }
 
       case "MEDIA_PERMISSION_GRANTED": {
-        // Panels watch chrome.storage / this broadcast and retry getUserMedia.
-        const tabs = await chrome.tabs.query({});
-        for (const tab of tabs) {
-          if (!tab.id || !isSupportedUrl(tab.url)) continue;
-          chrome.tabs
-            .sendMessage(tab.id, { type: "MEDIA_PERMISSION_GRANTED" })
-            .catch(() => {});
-        }
+        // Tell the floating panel to retry camera.
+        sendToFloatingPanel(
+          { type: "MEDIA_PERMISSION_GRANTED" },
+          { open: false }
+        ).catch(() => {});
         sendResponse({ ok: true });
         break;
       }
 
       case "GET_STATE": {
-        const state = await chrome.storage.local.get(null);
-        sendResponse({ ok: true, state });
+        sendResponse({ ok: true, state: await chrome.storage.local.get(null) });
         break;
       }
 
       case "SET_STATE": {
         await chrome.storage.local.set(message.patch || {});
-        // Best-effort notify; don't fail settings save if tab isn't ready.
-        sendToActiveTab({
-          type: "SETTINGS_CHANGED",
-          patch: message.patch,
-        }).catch(() => {});
+        sendToFloatingPanel(
+          { type: "SETTINGS_CHANGED", patch: message.patch },
+          { open: false }
+        ).catch(() => {});
         sendResponse({ ok: true });
         break;
       }
 
       case "CREATE_ROOM": {
-        /**
-         * Fast path: mint the room code + invite link HERE so the popup can
-         * copy/close immediately. Never await camera/PeerJS — those run in the
-         * page panel after storage updates (popup would close on the prompt).
-         */
-        const code = randomCode();
-        const tab = await getActiveTab();
-        if (!tab?.id || !isSupportedUrl(tab.url)) {
-          sendResponse({
-            ok: false,
-            error:
-              "Open a Netflix / YouTube / Disney+ / Hulu / Max / Prime Video tab first, then click Create.",
-          });
-          break;
-        }
-
-        // If FaceParty has never been granted camera, open the permission
-        // window now (popup itself can't keep a getUserMedia prompt open).
-        const { mediaPermissionGranted } = await chrome.storage.local.get(
-          "mediaPermissionGranted"
-        );
-        if (!mediaPermissionGranted) {
-          openMediaPermissionWindow().catch(() => {});
-        }
-
-        const injected = await ensureContentScript(tab.id);
-        await chrome.storage.local.set({
-          activeRoom: { code, joinedAt: Date.now() },
-        });
-
-        // Fire-and-forget join. Panel also watches `activeRoom` in storage.
-        if (injected) {
-          chrome.tabs
-            .sendMessage(tab.id, { type: "JOIN_ROOM", roomCode: code })
-            .catch(() => {});
-        }
-
-        sendResponse({
-          ok: true,
-          roomCode: code,
-          inviteLink: inviteLink(code),
-          needsMediaPermission: !mediaPermissionGranted,
-          joinWarning: injected
-            ? null
-            : "Reload the streaming tab if the FaceParty panel doesn’t appear.",
-          session: { roomCode: code, peerCount: 1 },
-        });
+        sendResponse(await startRoom(randomCode()));
         break;
       }
 
@@ -246,44 +303,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           });
           break;
         }
-
-        const tab = await getActiveTab();
-        if (!tab?.id || !isSupportedUrl(tab.url)) {
-          sendResponse({
-            ok: false,
-            error:
-              "Open a supported streaming tab first, then join the room.",
-          });
-          break;
-        }
-
-        const injected = await ensureContentScript(tab.id);
-        await chrome.storage.local.set({
-          activeRoom: { code, joinedAt: Date.now() },
-        });
-
-        // Don't block the popup on getUserMedia / PeerJS.
-        if (injected) {
-          chrome.tabs
-            .sendMessage(tab.id, { type: "JOIN_ROOM", roomCode: code })
-            .catch(() => {});
-        }
-
-        sendResponse({
-          ok: true,
-          roomCode: code,
-          inviteLink: inviteLink(code),
-          joinWarning: injected
-            ? null
-            : "Reload the streaming tab if the FaceParty panel doesn’t appear.",
-          session: { roomCode: code, peerCount: 1 },
-        });
+        sendResponse(await startRoom(code));
         break;
       }
 
       case "LEAVE_ROOM": {
         await chrome.storage.local.set({ activeRoom: null });
-        const result = await sendToActiveTab({ type: "LEAVE_ROOM" });
+        const result = await sendToFloatingPanel(
+          { type: "LEAVE_ROOM" },
+          { open: false }
+        );
         sendResponse(result?.ok ? result : { ok: true });
         break;
       }
@@ -292,7 +321,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "TOGGLE_CAM":
       case "TOGGLE_MIC":
       case "GET_SESSION": {
-        const result = await sendToActiveTab(message);
+        const result = await sendToFloatingPanel(message, {
+          open: message.type !== "GET_SESSION",
+        });
         if (message.type === "GET_SESSION" && !result?.ok) {
           const { activeRoom } = await chrome.storage.local.get("activeRoom");
           sendResponse({
@@ -304,6 +335,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         } else {
           sendResponse(result);
         }
+        break;
+      }
+
+      case "PANEL_READY": {
+        // Floating panel booted; remember its window if we can.
+        if (sender.tab?.windowId != null) {
+          floatingWindowId = sender.tab.windowId;
+        }
+        sendResponse({ ok: true });
         break;
       }
 
