@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FaceParty — Camera access</title>
+    <style>
+      :root {
+        --bg: #0f1419;
+        --text: #f4f7fb;
+        --muted: #9aa8b8;
+        --accent: #2ec4b6;
+        --accent-2: #ff7a6a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        font-family: "Segoe UI", "Avenir Next", "Helvetica Neue", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(120% 80% at 0% 0%, rgba(46, 196, 182, 0.22), transparent 55%),
+          radial-gradient(100% 80% at 100% 0%, rgba(255, 122, 106, 0.18), transparent 50%),
+          var(--bg);
+      }
+      .card {
+        width: min(420px, 100%);
+        text-align: center;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 22px;
+        letter-spacing: -0.02em;
+      }
+      p {
+        margin: 0 0 18px;
+        color: var(--muted);
+        line-height: 1.45;
+        font-size: 14px;
+      }
+      button {
+        border: none;
+        border-radius: 12px;
+        padding: 12px 18px;
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+        color: #081018;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: wait;
+      }
+      #status {
+        margin-top: 14px;
+        font-size: 13px;
+        color: var(--muted);
+        min-height: 1.2em;
+      }
+      #status.ok {
+        color: #8af0d4;
+      }
+      #status.err {
+        color: #ffb4c0;
+      }
+      .hint {
+        margin-top: 16px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Allow camera &amp; mic</h1>
+      <p>
+        Chrome only remembers this for the FaceParty extension — not for Netflix.
+        Click below, then choose <strong>Allow</strong> in the browser prompt.
+      </p>
+      <button id="allow" type="button">Enable camera &amp; microphone</button>
+      <div id="status"></div>
+      <p class="hint">
+        If nothing appears: click the lock/camera icon in this window’s address bar,
+        or open
+        <code>chrome://settings/content/camera</code>
+        and allow FaceParty.
+      </p>
+    </div>
+    <script src="permission.js"></script>
+  </body>
+</html>

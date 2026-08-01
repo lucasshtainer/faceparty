@@ -126,9 +126,49 @@ async function sendToActiveTab(message) {
   }
 }
 
+/** Open (or focus) the top-level page that can actually prompt for camera/mic. */
+async function openMediaPermissionWindow() {
+  const url = chrome.runtime.getURL("permission.html");
+  const existing = await chrome.windows.getAll({ populate: true });
+  for (const win of existing) {
+    const hit = win.tabs?.find((t) => t.url === url);
+    if (hit?.windowId != null) {
+      await chrome.windows.update(hit.windowId, { focused: true });
+      return { ok: true, reused: true };
+    }
+  }
+
+  await chrome.windows.create({
+    url,
+    type: "popup",
+    width: 460,
+    height: 420,
+    focused: true,
+  });
+  return { ok: true, reused: false };
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     switch (message?.type) {
+      case "OPEN_MEDIA_PERMISSION": {
+        sendResponse(await openMediaPermissionWindow());
+        break;
+      }
+
+      case "MEDIA_PERMISSION_GRANTED": {
+        // Panels watch chrome.storage / this broadcast and retry getUserMedia.
+        const tabs = await chrome.tabs.query({});
+        for (const tab of tabs) {
+          if (!tab.id || !isSupportedUrl(tab.url)) continue;
+          chrome.tabs
+            .sendMessage(tab.id, { type: "MEDIA_PERMISSION_GRANTED" })
+            .catch(() => {});
+        }
+        sendResponse({ ok: true });
+        break;
+      }
+
       case "GET_STATE": {
         const state = await chrome.storage.local.get(null);
         sendResponse({ ok: true, state });
@@ -163,6 +203,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           break;
         }
 
+        // If FaceParty has never been granted camera, open the permission
+        // window now (popup itself can't keep a getUserMedia prompt open).
+        const { mediaPermissionGranted } = await chrome.storage.local.get(
+          "mediaPermissionGranted"
+        );
+        if (!mediaPermissionGranted) {
+          openMediaPermissionWindow().catch(() => {});
+        }
+
         const injected = await ensureContentScript(tab.id);
         await chrome.storage.local.set({
           activeRoom: { code, joinedAt: Date.now() },
@@ -179,6 +228,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           ok: true,
           roomCode: code,
           inviteLink: inviteLink(code),
+          needsMediaPermission: !mediaPermissionGranted,
           joinWarning: injected
             ? null
             : "Reload the streaming tab if the FaceParty panel doesn’t appear.",

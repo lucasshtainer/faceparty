@@ -70,12 +70,19 @@
     frame.id = "fp-frame";
     frame.className = "fp-frame";
     frame.src = PANEL_URL;
-    // Required so getUserMedia works inside the extension iframe on Netflix.
-    frame.setAttribute(
-      "allow",
-      "camera; microphone; autoplay; clipboard-write; display-capture"
-    );
-    frame.allow = "camera; microphone; autoplay; clipboard-write; display-capture";
+    // Permissions-Policy: name the extension origin explicitly (required on
+    // locked-down hosts). 'src' also allows this frame's own origin.
+    const extOrigin = new URL(PANEL_URL).origin;
+    const allow = [
+      `camera ${extOrigin}`,
+      `microphone ${extOrigin}`,
+      "camera 'src'",
+      "microphone 'src'",
+      "autoplay 'src'",
+      "clipboard-write 'src'",
+    ].join("; ");
+    frame.setAttribute("allow", allow);
+    frame.allow = allow;
 
     resizeHandle = document.createElement("div");
     resizeHandle.id = "fp-resize";

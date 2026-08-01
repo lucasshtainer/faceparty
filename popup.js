@@ -103,6 +103,17 @@ els.name.addEventListener("change", persistSettings);
 els.camDefault.addEventListener("change", persistSettings);
 els.micDefault.addEventListener("change", persistSettings);
 
+els.camPermBtn = $("fp-cam-perm-btn");
+
+els.camPermBtn?.addEventListener("click", async () => {
+  const res = await send("OPEN_MEDIA_PERMISSION");
+  if (!res?.ok) {
+    showToast(res?.error || "Could not open permission window.", true);
+    return;
+  }
+  showToast("Allow camera in the FaceParty window, then return to Netflix.");
+});
+
 els.createBtn.addEventListener("click", async () => {
   await persistSettings();
   els.createBtn.disabled = true;
@@ -118,9 +129,11 @@ els.createBtn.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(res.inviteLink);
       showToast(
-        res.joinWarning
-          ? `Link copied. On Netflix: allow camera when prompted.`
-          : "Room created — invite link copied!"
+        res.needsMediaPermission
+          ? "Link copied! Allow camera in the FaceParty window."
+          : res.joinWarning
+            ? "Link copied. Reload Netflix if the panel doesn’t appear."
+            : "Room created — invite link copied!"
       );
     } catch {
       showToast(`Room ${res.roomCode} created. Use Copy invite link.`);

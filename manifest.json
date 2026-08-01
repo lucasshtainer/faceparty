@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FaceParty",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Live webcam reactions overlaid in the Teleparty chat sidebar — peer-to-peer, no server required.",
   "permissions": ["storage", "scripting"],
   "host_permissions": [
@@ -69,6 +69,8 @@
       "resources": [
         "panel.html",
         "panel.js",
+        "permission.html",
+        "permission.js",
         "content.css",
         "lib/peerjs.min.js",
         "icons/*"

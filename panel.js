@@ -286,7 +286,15 @@
     return stream;
   }
 
-  async function ensureLocalMedia({ requireReal = false } = {}) {
+  async function openPermissionWindow() {
+    try {
+      await chrome.runtime.sendMessage({ type: "OPEN_MEDIA_PERMISSION" });
+    } catch (err) {
+      warn("open permission window failed", err);
+    }
+  }
+
+  async function ensureLocalMedia({ requireReal = false, openPrompt = false } = {}) {
     if (state.localStream && !state.mediaPlaceholder) return state.localStream;
     if (state.localStream && state.mediaPlaceholder && !requireReal) {
       return state.localStream;
@@ -312,15 +320,24 @@
       stream.getAudioTracks().forEach((t) => (t.enabled = state.micOn));
       state._localAnalyser = attachAnalyser(stream);
       startSpeakingLoop();
+      await chrome.storage.local.set({ mediaPermissionGranted: true });
       // Re-call everyone so they receive the real camera track.
       recallAllPeers();
       renderGrid();
+      toast("Camera on");
       return stream;
     } catch (err) {
-      warn("getUserMedia failed", err?.name || err);
+      warn("getUserMedia failed", err?.name || err?.message || err);
+
+      // Chrome often returns NotAllowedError / "Failed due to shutdown" until
+      // the extension has been granted media from a top-level permission page.
+      if (openPrompt || requireReal) {
+        await openPermissionWindow();
+      }
+
       if (requireReal) {
         throw new Error(
-          "Camera/mic blocked. Click Allow on the FaceParty prompt, or site settings → Camera."
+          "Allow camera in the FaceParty window that just opened, then click Enable camera again."
         );
       }
       if (!state.localStream) {
@@ -328,7 +345,7 @@
         state.mediaPlaceholder = true;
         state.camOn = false;
         state.micOn = false;
-        toast("Camera blocked — click Enable camera in the panel");
+        toast("Enable camera — a FaceParty permission window will open");
       }
       return state.localStream;
     }
@@ -348,7 +365,9 @@
 
   function toggleCam(force) {
     if (!state.localStream || state.mediaPlaceholder) {
-      ensureLocalMedia({ requireReal: true }).catch((e) => toast(e.message));
+      ensureLocalMedia({ requireReal: true, openPrompt: true }).catch((e) =>
+        toast(e.message)
+      );
       return;
     }
     state.camOn = typeof force === "boolean" ? force : !state.camOn;
@@ -359,7 +378,9 @@
 
   function toggleMic(force) {
     if (!state.localStream || state.mediaPlaceholder) {
-      ensureLocalMedia({ requireReal: true }).catch((e) => toast(e.message));
+      ensureLocalMedia({ requireReal: true, openPrompt: true }).catch((e) =>
+        toast(e.message)
+      );
       return;
     }
     state.micOn = typeof force === "boolean" ? force : !state.micOn;
@@ -436,7 +457,9 @@
       btn.textContent = "Enable camera";
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        ensureLocalMedia({ requireReal: true }).catch((err) => toast(err.message));
+        ensureLocalMedia({ requireReal: true, openPrompt: true }).catch((err) =>
+          toast(err.message)
+        );
       });
       placeholder.appendChild(btn);
     } else {
@@ -1171,6 +1194,18 @@
       }
       case "PING":
         return { ok: true, ready: true };
+      case "MEDIA_PERMISSION_GRANTED":
+        // Permission window finished — retry real camera now.
+        ensureLocalMedia({ requireReal: false, openPrompt: false })
+          .then(() => {
+            if (state.mediaPlaceholder) {
+              // Still blocked; user may have closed the window without allowing.
+              return;
+            }
+            renderGrid();
+          })
+          .catch(() => {});
+        return { ok: true };
       default:
         return { ok: false, error: "Unknown message." };
     }
@@ -1209,6 +1244,9 @@
     if (changes.panelCollapsed) {
       state.panelCollapsed = Boolean(changes.panelCollapsed.newValue);
       applyCollapsedChrome();
+    }
+    if (changes.mediaPermissionGranted?.newValue && state.mediaPlaceholder) {
+      ensureLocalMedia({ requireReal: false, openPrompt: false }).catch(() => {});
     }
   });
 
